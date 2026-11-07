@@ -20,6 +20,7 @@ Workcrew AI — a platform where AI agents do work tracked as kanban tickets. Ag
 - **A service used by more than one feature (mail, logging, etc.) lives in `services/`, not inside any one feature's `lib/<feature>/service.ts`.** Feature services call these shared services; shared services never import a feature's `lib/<feature>/` code back.
 - **Any sandbox or command execution always goes through the Runner Adapter — never call `@vercel/sandbox`, `dockerode`, or any other sandbox SDK directly.** Get an adapter with `getRunnerAdapter()` from `services/sandbox/sandbox.service.ts`, then drive it only through the `RunnerAdapter` interface (`prepare()` / `execute()` / `snapshot()` / `cleanup()`) from `services/sandbox/sandbox.types.ts` — check the table below for the exact pieces. There are two providers today, `"vercel"` (default) and `"docker-local"` — pass `provider` or set `RUNNER_PROVIDER` to choose. Adding another means a new file in `services/sandbox/adapters/` and a new case in `getRunnerAdapter()`'s switch; nothing that already calls `getRunnerAdapter()` changes.
 - **Demo/testing-only API routes (e.g. `demo-sandbox`) keep their `types.ts`/`validation.ts`/`service.ts` colocated inside their own `app/api/<route>/` folder, not under `lib/`.** `lib/` is reserved for real feature logic reused across the app.
+- **Every API route returns the standard envelope — never a hand-shaped `NextResponse.json({...})`.** Build responses with the `apiResponseService` singleton (`services/api-response/service.ts`; types + `HttpStatusCode` enum in `services/api-response/types.ts`): `apiResponseService.success(data, options?)` / `apiResponseService.error(input?)`. Shape: `{ success, status, data, pagination?, meta: { timestamp, responseTimeMs } }` on success, `{ success: false, status, data: null, error: { code, message, details? }, meta }` on failure. `error()`'s `code`/`message` are optional — omit them to fall back to `DEFAULT_STATUS_CODES`/`DEFAULT_STATUS_MESSAGES` for the given `status`. Call `apiResponseService.startTimer()` at the top of the handler and pass it as `startedAt` so `meta.responseTimeMs` is accurate; build `pagination` with `apiResponseService.buildPagination({ currentPage, pageSize, totalItems })` for any list endpoint.
 
 ## Folder Structure
 
@@ -42,6 +43,9 @@ workcrew-ai/
 │       └── service.ts
 ├── services/             # common services used across features (mail, log, etc. — per rule above)
 │   ├── <service>.service.ts
+│   ├── api-response/      # standard API response envelope (per rule above)
+│   │   ├── types.ts        # ApiResponse, PaginationMeta, ResponseMeta, ApiErrorShape
+│   │   └── service.ts      # apiResponseService singleton — .success() / .error() / .buildPagination() / .startTimer()
 │   ├── swagger/           # OpenAPI builder + aggregator (per rule above)
 │   │   ├── swagger.builder.ts
 │   │   ├── swagger.service.ts
@@ -129,6 +133,29 @@ Check this before touching any sandbox/command-execution code (per the rule abov
 | Local Docker implementation (`"docker-local"`, dev-only) | `services/sandbox/adapters/docker-local.adapter.ts` | `DockerLocalRunnerAdapter` |
 
 `SandboxLanguage` is a closed union (`"python"` \| `"nodejs"` today) — add a new language by extending that union in `sandbox.types.ts` and its mapping in each adapter's `LANGUAGE_IMAGE_MAP` (or equivalent), never by accepting a raw string.
+
+## API Response Envelope
+
+Check this before returning anything from an `app/api/**/route.ts` handler (per the rule above) — always the `apiResponseService` singleton, never a hand-shaped `NextResponse.json()`.
+
+| Piece | Path | Function/Export Name |
+|---|---|---|
+| Types + enum | `services/api-response/types.ts` | `ApiResponse`, `ApiSuccessResponse`, `ApiErrorResponse`, `ApiErrorShape`, `ApiErrorInput`, `PaginationMeta`, `PaginationInput`, `ResponseMeta`, `HttpStatusCode`, `DEFAULT_STATUS_CODES`, `DEFAULT_STATUS_MESSAGES` |
+| Service (class + singleton) | `services/api-response/service.ts` | `apiResponseService` — `.success(data, options?)`, `.error(input?)`, `.buildPagination(input)`, `.startTimer()` |
+
+`error()`'s `code`/`message` are optional — when omitted, they default from `DEFAULT_STATUS_CODES`/`DEFAULT_STATUS_MESSAGES` for the given `status` (e.g. `status: HttpStatusCode.NOT_FOUND` alone yields `{ code: "NOT_FOUND", message: "Not Found" }`). Pass them explicitly only when the default isn't specific enough.
+
+Shape:
+
+```json
+// success
+{ "success": true, "status": 200, "data": {}, "pagination": { "totalPages": 1, "currentPage": 1, "nextPage": null, "previousPage": null, "hasPrevious": false, "hasNext": false, "totalItems": 0 }, "meta": { "timestamp": "2026-01-01T00:00:00.000Z", "responseTimeMs": 12 } }
+
+// error
+{ "success": false, "status": 404, "data": null, "error": { "code": "NOT_FOUND", "message": "Ticket not found" }, "meta": { "timestamp": "2026-01-01T00:00:00.000Z", "responseTimeMs": 4 } }
+```
+
+`pagination` is only included when passed (list endpoints); omit it entirely for single-resource responses.
 
 ## Package Choices
 

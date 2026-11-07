@@ -24,7 +24,7 @@ const runRequestSchema = SchemaBuilder.object()
 		example: "vercel",
 	});
 
-const runResponseSchema = SchemaBuilder.object()
+const runResultSchema = SchemaBuilder.object()
 	.setDescription("Result of running the command in the sandbox.")
 	.addEnum("provider", ["vercel", "docker-local"], {
 		required: true,
@@ -35,6 +35,42 @@ const runResponseSchema = SchemaBuilder.object()
 	.addString("stdout", { required: true, example: "hello\n" })
 	.addString("stderr", { required: true, example: "" })
 	.addInteger("durationMs", { required: true, example: 842 });
+
+// Standard envelope (services/api-response) — every route's openapi.ts wraps
+// its own data schema the same way; see AGENTS.md "API Response Envelope".
+const responseMetaSchema = SchemaBuilder.object()
+	.addString("timestamp", {
+		required: true,
+		format: "date-time",
+		example: "2026-01-01T00:00:00.000Z",
+	})
+	.addInteger("responseTimeMs", { required: true, example: 842 });
+
+const runResponseSchema = SchemaBuilder.object()
+	.setDescription("Standard success envelope wrapping `DemoSandboxRunResult`.")
+	.addBoolean("success", { required: true, example: true })
+	.addInteger("status", { required: true, example: 200 })
+	.addRef("data", "DemoSandboxRunResult", true)
+	.addObject("meta", responseMetaSchema, true);
+
+const errorShapeSchema = SchemaBuilder.object()
+	.addString("code", { required: true, example: "VALIDATION_ERROR" })
+	.addString("message", {
+		required: true,
+		example: "`command` is required and must be a non-empty string",
+	});
+
+const errorResponseSchema = SchemaBuilder.object()
+	.setDescription("Standard error envelope (services/api-response).")
+	.addBoolean("success", { required: true, example: false })
+	.addInteger("status", { required: true, example: 400 })
+	.addProp(
+		"data",
+		{ type: "object", nullable: true, description: "Always `null` for error responses." },
+		true,
+	)
+	.addRef("error", "ApiErrorShape", true)
+	.addObject("meta", responseMetaSchema, true);
 
 const runOperation = OperationBuilder.create("Run a command in a sandbox")
 	.setTags("Sandbox (Demo)")

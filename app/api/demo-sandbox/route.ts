@@ -1,9 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import {
 	getRunnerAdapter,
 	type RunnerProvider,
 } from "@/services/sandbox/sandbox.service";
 import type { SandboxLanguage } from "@/services/sandbox/sandbox.types";
+import { apiResponseService } from "@/services/api-response/service";
+import { HttpStatusCode } from "@/services/api-response/types";
 
 const RUNNER_PROVIDERS: RunnerProvider[] = ["vercel", "docker-local"];
 
@@ -44,13 +46,16 @@ interface DemoSandboxRunBody {
  * Demo/testing only.
  */
 export async function POST(request: NextRequest) {
+	const startedAt = apiResponseService.startTimer();
 	const body = (await request.json()) as DemoSandboxRunBody;
 
 	if (typeof body.command !== "string" || body.command.trim().length === 0) {
-		return NextResponse.json(
-			{ error: "`command` is required and must be a non-empty string" },
-			{ status: 400 },
-		);
+		return apiResponseService.error({
+			status: HttpStatusCode.BAD_REQUEST,
+			code: "VALIDATION_ERROR",
+			message: "`command` is required and must be a non-empty string",
+			startedAt,
+		});
 	}
 
 	const resolvedProvider: RunnerProvider =
@@ -58,12 +63,12 @@ export async function POST(request: NextRequest) {
 		((process.env.RUNNER_PROVIDER as RunnerProvider | undefined) ?? "vercel");
 
 	if (!RUNNER_PROVIDERS.includes(resolvedProvider)) {
-		return NextResponse.json(
-			{
-				error: `\`provider\` must be one of: ${RUNNER_PROVIDERS.join(", ")}`,
-			},
-			{ status: 400 },
-		);
+		return apiResponseService.error({
+			status: HttpStatusCode.BAD_REQUEST,
+			code: "VALIDATION_ERROR",
+			message: `\`provider\` must be one of: ${RUNNER_PROVIDERS.join(", ")}`,
+			startedAt,
+		});
 	}
 
 	const adapter = getRunnerAdapter(resolvedProvider);
@@ -74,16 +79,19 @@ export async function POST(request: NextRequest) {
 			command: body.command,
 			args: body.args,
 		});
-		return NextResponse.json({ provider: resolvedProvider, ...result });
-	} catch (error) {
-		return NextResponse.json(
-			{
-				provider: resolvedProvider,
-				error:
-					error instanceof Error ? error.message : "Sandbox execution failed",
-			},
-			{ status: 500 },
+		return apiResponseService.success(
+			{ provider: resolvedProvider, ...result },
+			{ startedAt },
 		);
+	} catch (error) {
+		return apiResponseService.error({
+			status: HttpStatusCode.INTERNAL_SERVER_ERROR,
+			code: "SANDBOX_EXECUTION_FAILED",
+			message:
+				error instanceof Error ? error.message : "Sandbox execution failed",
+			details: { provider: resolvedProvider },
+			startedAt,
+		});
 	} finally {
 		if (hasRemoveSandbox(adapter)) {
 			await adapter.removeSandbox();
