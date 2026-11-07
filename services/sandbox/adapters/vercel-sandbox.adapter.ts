@@ -12,12 +12,15 @@ const DEFAULT_TIMEOUT_MS = 5 * 60_000;
 
 /**
  * Maps our closed `SandboxLanguage` set onto this adapter's actual Vercel
- * image strings. Add a new line here when `SandboxLanguage` gains a value —
- * this is the only place that needs to know Vercel's image naming.
+ * image strings. Must use the fully-qualified `vercel/sandbox/<name>` scope —
+ * a bare name like `"python:3.14"` resolves against our own project's VCR
+ * registry instead of Vercel's managed images and 404s with "Image not found".
+ * Add a new line here when `SandboxLanguage` gains a value — this is the only
+ * place that needs to know Vercel's image naming.
  */
 const LANGUAGE_IMAGE_MAP: Record<SandboxLanguage, string> = {
-	python: "python:3.14",
-	nodejs: "node:24",
+	python: "vercel/sandbox/python:3.14",
+	nodejs: "vercel/sandbox/node:24",
 };
 
 /**

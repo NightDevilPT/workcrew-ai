@@ -18,7 +18,7 @@ Workcrew AI — a platform where AI agents do work tracked as kanban tickets. Ag
 - **Every API route needs a sibling `openapi.ts` built with the Swagger builder, kept in sync with `route.ts`.** When you create or update `app/api/<route>/route.ts`, create or update `app/api/<route>/openapi.ts` in the same folder using `OpenAPI.module()` from `services/swagger/swagger.builder.ts` to register that route's paths, request/response schemas and tags — then import and `.merge()` it into `services/swagger/routes/index.ts` so it shows up in `allPaths`/`allSchemas`/`allTags`. Never hand-write OpenAPI JSON/YAML directly, and never let `route.ts` change without its `openapi.ts` changing to match (mark unfinished routes with `.setImplementation('mock')`, switch to `'real'` once done).
 - **UI is built from shared, reusable components — check the list below before writing new markup.**
 - **A service used by more than one feature (mail, logging, etc.) lives in `services/`, not inside any one feature's `lib/<feature>/service.ts`.** Feature services call these shared services; shared services never import a feature's `lib/<feature>/` code back.
-- **Any sandbox or command execution always goes through the Runner Adapter — never call `@vercel/sandbox` (or any other sandbox SDK) directly.** Get an adapter with `getRunnerAdapter()` from `services/sandbox/sandbox.service.ts`, then drive it only through the `RunnerAdapter` interface (`prepare()` / `execute()` / `snapshot()` / `cleanup()`) from `services/sandbox/sandbox.types.ts` — check the table below for the exact pieces. Adding a new provider (e.g. local Docker) means a new file in `services/sandbox/adapters/` and a new case in `getRunnerAdapter()`'s switch; nothing that already calls `getRunnerAdapter()` changes.
+- **Any sandbox or command execution always goes through the Runner Adapter — never call `@vercel/sandbox`, `dockerode`, or any other sandbox SDK directly.** Get an adapter with `getRunnerAdapter()` from `services/sandbox/sandbox.service.ts`, then drive it only through the `RunnerAdapter` interface (`prepare()` / `execute()` / `snapshot()` / `cleanup()`) from `services/sandbox/sandbox.types.ts` — check the table below for the exact pieces. There are two providers today, `"vercel"` (default) and `"docker-local"` — pass `provider` or set `RUNNER_PROVIDER` to choose. Adding another means a new file in `services/sandbox/adapters/` and a new case in `getRunnerAdapter()`'s switch; nothing that already calls `getRunnerAdapter()` changes.
 - **Demo/testing-only API routes (e.g. `demo-sandbox`) keep their `types.ts`/`validation.ts`/`service.ts` colocated inside their own `app/api/<route>/` folder, not under `lib/`.** `lib/` is reserved for real feature logic reused across the app.
 
 ## Folder Structure
@@ -51,7 +51,8 @@ workcrew-ai/
 │       ├── sandbox.types.ts    # RunnerAdapter interface + shared types
 │       ├── sandbox.service.ts  # getRunnerAdapter() factory, selects the implementation
 │       └── adapters/
-│           └── vercel-sandbox.adapter.ts   # only implementation so far
+│           ├── vercel-sandbox.adapter.ts   # "vercel" provider (default)
+│           └── docker-local.adapter.ts     # "docker-local" provider (dev-only, not a security boundary)
 ├── hooks/                # shared React hooks
 ├── docs/                 # all project documentation (overview.md, tech-stack.md, roadmap.md)
 ├── public/               # static assets
@@ -124,7 +125,8 @@ Check this before touching any sandbox/command-execution code (per the rule abov
 |---|---|---|
 | Interface + shared types | `services/sandbox/sandbox.types.ts` | `RunnerAdapter`, `RunContext`, `RunStep`, `RunStepResult`, `RunnerSnapshot`, `SandboxLanguage` |
 | Factory (the swap point — pass or env-set the provider) | `services/sandbox/sandbox.service.ts` | `getRunnerAdapter(provider?)` |
-| Vercel Sandbox implementation (only one so far) | `services/sandbox/adapters/vercel-sandbox.adapter.ts` | `VercelSandboxRunnerAdapter` |
+| Vercel Sandbox implementation (`"vercel"`, default) | `services/sandbox/adapters/vercel-sandbox.adapter.ts` | `VercelSandboxRunnerAdapter` |
+| Local Docker implementation (`"docker-local"`, dev-only) | `services/sandbox/adapters/docker-local.adapter.ts` | `DockerLocalRunnerAdapter` |
 
 `SandboxLanguage` is a closed union (`"python"` \| `"nodejs"` today) — add a new language by extending that union in `sandbox.types.ts` and its mapping in each adapter's `LANGUAGE_IMAGE_MAP` (or equivalent), never by accepting a raw string.
 
