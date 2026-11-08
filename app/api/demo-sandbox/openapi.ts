@@ -174,15 +174,24 @@ const runOperation = OperationBuilder.create("Run a command in a sandbox")
 	})
 	.addResponse(200, "Command executed", ref("DemoSandboxRunResponse"), {
 		example: {
-			provider: "vercel",
-			exitCode: 0,
-			stdout: "hello-from-sandbox\n",
-			stderr: "",
-			durationMs: 842,
+			success: true,
+			status: 200,
+			data: {
+				provider: "vercel",
+				exitCode: 0,
+				stdout: "hello-from-sandbox\n",
+				stderr: "",
+				durationMs: 842,
+			},
+			meta: { timestamp: "2026-01-01T00:00:00.000Z", responseTimeMs: 842 },
 		},
 	})
-	.addResponse(400, "Missing or invalid `command`")
-	.addResponse(500, "Sandbox execution failed")
+	.addResponse(
+		400,
+		"Missing or invalid `command`/`provider`",
+		ref("DemoSandboxErrorResponse"),
+	)
+	.addResponse(500, "Sandbox execution failed", ref("DemoSandboxErrorResponse"))
 	.setImplementation("real");
 
 export const demoSandboxOpenApi = OpenAPI.module()
@@ -191,6 +200,9 @@ export const demoSandboxOpenApi = OpenAPI.module()
 		"Test endpoint for the Runner Adapter (services/sandbox) — not for production use.",
 	)
 	.addSchema("DemoSandboxRunRequest", runRequestSchema)
+	.addSchema("DemoSandboxRunResult", runResultSchema)
 	.addSchema("DemoSandboxRunResponse", runResponseSchema)
+	.addSchema("ApiErrorShape", errorShapeSchema)
+	.addSchema("DemoSandboxErrorResponse", errorResponseSchema)
 	.addEndpoint("/api/demo-sandbox", "post", runOperation)
 	.export();

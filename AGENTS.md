@@ -21,11 +21,22 @@ Workcrew AI — a platform where AI agents do work tracked as kanban tickets. Ag
 - **Any sandbox or command execution always goes through the Runner Adapter — never call `@vercel/sandbox`, `dockerode`, or any other sandbox SDK directly.** Get an adapter with `getRunnerAdapter()` from `services/sandbox/sandbox.service.ts`, then drive it only through the `RunnerAdapter` interface (`prepare()` / `execute()` / `snapshot()` / `cleanup()`) from `services/sandbox/sandbox.types.ts` — check the table below for the exact pieces. There are two providers today, `"vercel"` (default) and `"docker-local"` — pass `provider` or set `RUNNER_PROVIDER` to choose. Adding another means a new file in `services/sandbox/adapters/` and a new case in `getRunnerAdapter()`'s switch; nothing that already calls `getRunnerAdapter()` changes.
 - **Demo/testing-only API routes (e.g. `demo-sandbox`) keep their `types.ts`/`validation.ts`/`service.ts` colocated inside their own `app/api/<route>/` folder, not under `lib/`.** `lib/` is reserved for real feature logic reused across the app.
 - **Every API route returns the standard envelope — never a hand-shaped `NextResponse.json({...})`.** Build responses with the `apiResponseService` singleton (`services/api-response/service.ts`; types + `HttpStatusCode` enum in `services/api-response/types.ts`): `apiResponseService.success(data, options?)` / `apiResponseService.error(input?)`. Shape: `{ success, status, data, pagination?, meta: { timestamp, responseTimeMs } }` on success, `{ success: false, status, data: null, error: { code, message, details? }, meta }` on failure. `error()`'s `code`/`message` are optional — omit them to fall back to `DEFAULT_STATUS_CODES`/`DEFAULT_STATUS_MESSAGES` for the given `status`. Call `apiResponseService.startTimer()` at the top of the handler and pass it as `startedAt` so `meta.responseTimeMs` is accurate; build `pagination` with `apiResponseService.buildPagination({ currentPage, pageSize, totalItems })` for any list endpoint.
+- **Cross-cutting request logic (rate limiting, and anything added later) lives in `middleware/`, one folder per concern (e.g. `middleware/rate-limit/`).** This Next.js version renamed `middleware.ts` to `proxy.ts` (exported function is `proxy`, not `middleware` — see `node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/proxy.md`); only one `proxy.ts` is supported per project, so it stays a thin delegate — never inline logic directly in `proxy.ts`. Each middleware supports **two usage modes** from the same core logic, both exported from its folder:
+  - **Global** — a `create<Name>Middleware(config): MiddlewareHandler` (shape in `middleware/types.ts`), run from `middleware/index.ts`'s `runMiddleware()` pipeline for every request `proxy.ts`'s matcher covers. Per-route tuning (e.g. a tighter rate limit on one route than the global default) goes in `middleware/registry.ts`, matched by longest `pathPrefix` — never hardcoded inside the handler.
+  - **Per-route** — a `with<Name>(handler, config): RouteHandler` (shape also in `middleware/types.ts`) that wraps one route's exported `GET`/`POST`/etc. directly, for a route the global matcher doesn't cover. It must stay a drop-in replacement: same `request`/`context` signature as the handler it wraps, including dynamic `context.params`, unchanged.
+  See `middleware/rate-limit/index.ts` for the reference shape: one shared `checkRateLimit()` core, used by both `createRateLimitMiddleware()` and `withRateLimit()`, so the two modes can never drift apart.
 
 ## Folder Structure
 
 ```
 workcrew-ai/
+├── proxy.ts              # Next.js 16 proxy entry point (was middleware.ts) — thin delegate, no logic here
+├── middleware/            # proxy-layer logic (per rule above) — one folder per concern
+│   ├── types.ts            # MiddlewareHandler, MiddlewareContext, RouteHandler
+│   ├── index.ts            # runMiddleware() — composes every global handler and runs the pipeline
+│   ├── registry.ts         # per-route config for GLOBAL middlewares, resolved by longest pathPrefix
+│   └── <middleware>/
+│       └── index.ts         # RateLimitConfig, createRateLimitMiddleware() (global), withRateLimit() (per-route)
 ├── app/                  # Next.js App Router — pages and API routes
 │   ├── api/              # all API route handlers live here (per rule above)
 │   │   └── <route>/
@@ -156,6 +167,20 @@ Shape:
 ```
 
 `pagination` is only included when passed (list endpoints); omit it entirely for single-resource responses.
+
+## Middleware Pipeline
+
+Check this before adding any proxy-layer logic (per the rule above) — new concerns are **one new `middleware/<name>/` folder** exporting both a global `create<Name>Middleware()` and a per-route `with<Name>()`, plus one line in `middleware/index.ts`'s handler list if it's used globally. Never inline logic in `proxy.ts`.
+
+| Piece | Path | Function/Export Name |
+|---|---|---|
+| Entry point (Next.js convention) | `proxy.ts` | `proxy()`, `config.matcher` |
+| Pipeline (composes + runs every global handler) | `middleware/index.ts` | `runMiddleware(request)` |
+| Types | `middleware/types.ts` | `MiddlewareHandler`, `MiddlewareContext`, `RouteHandler` |
+| Per-route config (global middlewares only) | `middleware/registry.ts` | `resolveRateLimitConfig(pathname)`, `ROUTE_MIDDLEWARE_CONFIG`, `DEFAULT_RATE_LIMIT` |
+| Rate limiting (one concern so far) | `middleware/rate-limit/index.ts` | `RateLimitConfig`, `createRateLimitMiddleware(config)` (global), `withRateLimit(handler, config)` (per-route) |
+
+A rate-limited request gets the standard error envelope (`apiResponseService.error()`, `HttpStatusCode.TOO_MANY_REQUESTS`) plus a `Retry-After` header — not a bespoke shape, whichever mode triggered it. The in-memory bucket store in `rate-limit/index.ts` is per-process, fine for local dev and a single instance; swap it for a shared store (Postgres/Redis) before running more than one instance in production. Use `withRateLimit()` directly in a route's `route.ts` only for a route `proxy.ts`'s matcher doesn't cover globally — if the route is already covered, configure it in `registry.ts` instead of wrapping it too (avoid double-limiting the same request).
 
 ## Package Choices
 

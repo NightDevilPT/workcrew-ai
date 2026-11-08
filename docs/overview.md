@@ -171,7 +171,11 @@ The detailed technology stack, service boundaries, Prisma ORM database models, a
 ## 7. Domain Model (kept from Revision 4)
 
 ```
-Workspace
+Organization (optional umbrella — see 7.3)
+  Workspace (org-connected: access via Organization membership)
+    ...same shape as below...
+
+Workspace (personal: no Organization — owned directly by one user)
   GitHub App installation (org-level, optional — only needed for Sandbox-runtime workflows)
   Project
     Shared: environments, knowledge sources
@@ -185,6 +189,7 @@ Workspace
 - Workflow definitions are versioned; a run pins the version it started with.
 - Parent work items (a Requirement) can have child work items (atomic tickets made by the Planner).
 - **A workflow's runtime decides whether GitHub is involved, not the project.** A project can hold both a code workflow and a non-code workflow side by side — see 7.1.
+- **A workspace is either personal or organization-connected, never both — see 7.3.** This is independent of the GitHub/non-GitHub split in 7.1; a personal workspace can still have a Sandbox-runtime workflow with its own workspace-level GitHub App install.
 
 ### 7.1 Two Setup Flows: GitHub (Tech) vs. No-GitHub (Non-Tech)
 
@@ -245,13 +250,14 @@ graph TD
 
 | Table                                                             | Purpose                                                |
 | :---------------------------------------------------------------- | :----------------------------------------------------- |
-| `workspaces`, `users`, `memberships`                              | Tenant and access                                      |
-| `projects`                                                        | Repo binding, settings                                 |
+| `organizations`, `organization_memberships`                      | Optional umbrella above a workspace, with legal/billing identity — see 7.3 |
+| `workspaces`, `users`, `memberships`, `refresh_tokens`            | Tenant, access, and login sessions (02-data-model.md §3) |
+| `projects`, `project_memberships`                                 | Repo binding, settings, and narrower single-project access (02-data-model.md §5) |
 | `environments`                                                    | Encrypted variables per project                        |
 | `workflow_definitions`, `workflow_stages`, `workflow_transitions` | Blueprint (one seeded workflow at first)               |
 | `boards`                                                          | One per workflow                                       |
 | `work_items`, `work_item_events`                                  | Tickets and immutable timeline                         |
-| `workflow_runs`, `stage_runs`                                     | Execution records                                      |
+| `workflow_runs`, `stage_runs`, `execution_events`                 | Execution records and their chronological timeline     |
 | `roles`, `role_commands`, `role_rules`                            | AI role definitions                                    |
 | `step_plans`, `step_results`                                      | Per-round plans and outcomes (log keys, not full logs) |
 | `routing_decisions`                                               | Which model was chosen and why                         |
@@ -260,7 +266,40 @@ graph TD
 
 Every tenant table carries `workspace_id`, `created_at`, `updated_at`. Use Postgres row-level security as a second layer on top of scoped queries.
 
-## 8. Governance and Cost Control
+### 7.3 Personal vs. Organization Workspaces
+
+A workspace is owned exactly one of two ways, decided once when it's created and never both at the same time:
+
+- **Personal** — owned directly by the one user who created it, same shape as a personal GitHub account. That owner invites specific individual users straight into the workspace (existing `memberships` table, workspace-scoped) to collaborate on tasks — there is no wider organization behind it at all.
+- **Organization-connected** — the workspace belongs to an Organization. Org `Owner`/`Admin` get an admin override (full access to every workspace under the org, same as a GitHub org owner seeing every repo); a plain org `Member` gets **no automatic access** — they still need an explicit `memberships` row for a given workspace, same as anyone else. Being in the org just establishes billing/admin standing, not workspace visibility.
+
+Underneath either ownership mode, access can be narrowed one level further: someone can be given a `project_memberships` row for one specific Project instead of a workspace-wide `memberships` row — access to that one Project only, nothing else in the workspace. See `docs/02-data-model.md` §3/§5 for the full 3-level resolution order.
+
+```mermaid
+graph TD
+    User["User signs up / logs in"]
+    OrgCheck{"Connected to an Organization?"}
+    OrgRole{"Org role?"}
+    OrgAdminAccess["Owner/Admin: full access<br/>to every Workspace under the org"]
+    OrgMemberAccess["Member: no automatic access —<br/>still needs explicit Workspace membership"]
+    PersonalWorkspace["Personal Workspace<br/>owned directly by this user"]
+    Invite["Owner invites specific individual users<br/>directly into this one Workspace<br/>(workspace-level membership)"]
+    ProjectScoped["...or a user gets project_memberships only:<br/>access to one Project, not the whole Workspace"]
+    Project["Project(s) under the Workspace<br/>(section 7 shape, unchanged either way)"]
+
+    User --> OrgCheck
+    OrgCheck -->|yes| OrgRole
+    OrgRole -->|Owner/Admin| OrgAdminAccess --> Project
+    OrgRole -->|Member| OrgMemberAccess --> Project
+    OrgCheck -->|no| PersonalWorkspace --> Invite --> Project
+    Project -.-> ProjectScoped
+```
+
+**Why this split matters:** it lets one person use the entire platform — tickets, boards, even a Sandbox-runtime workflow with its own GitHub App install — without ever creating or joining an Organization, exactly like a developer who has never joined a GitHub org can still own repos and add collaborators to them one at a time. A company that wants centralized membership, billing, and admin control across many workspaces creates an Organization instead, and every workspace under it inherits access from that single membership roster rather than needing to be configured one by one.
+
+This is orthogonal to the GitHub/non-GitHub split in 7.1 — a personal workspace can still run Sandbox-runtime workflows with its own workspace-level GitHub App installation; "personal" describes who owns the *workspace*, not whether that workspace does code work.
+
+**Open question (see section 11):** whether the GitHub App installation should eventually move to the Organization level and be shared across every workspace under it, instead of installed separately per workspace as it is today — not decided yet, since no workspace currently needs more than one.
 
 - **Budget guard:** a pre-call check against per-call, per-stage, per-workflow, per-project and per-workspace limits. At the cap the ticket pauses as `budget_exceeded`.
 - **Model Router:** each role is `fixed` (one model) or `auto`. Models are grouped into Economy, Standard and Premium tiers in configuration. The router escalates one tier after a failure and logs every decision.
@@ -348,7 +387,7 @@ Everything the platform needs, grouped by area. The staged build-out plan for th
 
 ## 10. Technical Documents to Maintain
 
-Keep these files in the `/docs` folder of the repository so the overview stays short and details live in focused documents. **Current status:** the documentation set is currently split into three files — `docs/overview.md` (this file), `docs/tech-stack.md`, and `docs/roadmap.md` — per the documentation rule in [AGENTS.md](../AGENTS.md). Split a row below out into its own file only once it would otherwise make one of those hard to navigate; don't split preemptively.
+Keep these files in the `/docs` folder of the repository so the overview stays short and details live in focused documents. **Current status:** the documentation set currently has five files — `docs/overview.md` (this file), `docs/tech-stack.md`, `docs/roadmap.md`, `docs/vercel-sandbox.md`, and `docs/02-data-model.md` — per the documentation rule in [AGENTS.md](../AGENTS.md). Split a remaining row below out into its own file only once it would otherwise make an existing file hard to navigate; don't split preemptively.
 
 | File                            | Contents                                                            |
 | :------------------------------ | :------------------------------------------------------------------ |
@@ -379,6 +418,7 @@ Keep these files in the `/docs` folder of the repository so the overview stays s
 | Live updates      | SSE or WebSocket                                               | SSE first; WebSocket if two-way features are needed                         |
 | Agent language    | Node.js or Python                                              | Node.js now, Python only for data-heavy work                                |
 | Boards            | One workflow per board or one board across workflows           | One workflow per board                                                      |
+| GitHub App scope  | Per-workspace (current) or shared across an Organization's workspaces (section 7.3) | Keep per-workspace until an Organization actually needs more than one workspace sharing one install |
 
 ## 12. Main Risks
 
